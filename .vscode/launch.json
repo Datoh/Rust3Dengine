@@ -10,6 +10,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/target/debug/rust_3d_engine.exe",
       "args": [],
+      "cwd": "${workspaceRoot}",
       "console": "integratedTerminal",
       "sourceLanguages": ["rust"],
       "preLaunchTask": "cargo build",
