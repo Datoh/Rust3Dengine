@@ -1,3 +1,6 @@
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
 use tetra::{window, input, graphics, time};
 use tetra::graphics::{Color, DrawParams, Texture};
 use tetra::{Context, ContextBuilder, State};
@@ -7,37 +10,86 @@ const PI: f32 = 3.14159;
 const PI2: f32 = 2.0 * PI;
 
 const DBG_DRAW: bool = true;
+const DBG_DRAW_FILL_TRIANGLE: bool = DBG_DRAW && true;
 const DBG_DRAW_WIREFRAME: bool = DBG_DRAW && true;
 const DBG_DRAW_NORMAL: bool = DBG_DRAW && false;
 
-pub fn draw_line(ctx: &mut Context, pixel_texture: &Texture, x1: f32, y1: f32, x2: f32, y2: f32, color: &Color) {
-  let px1 = x1 as i32;
-  let py1 = y1 as i32;
-  let px2 = x2 as i32;
-  let py2 = y2 as i32;
+fn pixel_line(width: &mut Vec<(i32, i32)>, x1: i32, y1: i32, x2: i32, y2: i32) {
+  let dx = (x2 - x1).abs();
+  let sx : i32 = if x1 < x2 { 1 } else { -1 };
+  let dy = -(y2 - y1).abs();
+  let sy : i32 = if y1 < y2 { 1 } else { -1 };
+  let mut err = dx + dy;
+  let mut x = x1;
+  let mut y = y1;
 
-  let dx = px2 - px1;
-  let dy = py2 - py1;
-  if dx.abs() > dy.abs() {
-    let inc_x = if dx > 0 { 1 } else { -1 };
-    let mut x = px1;
-    while x != px1 + dx {
-      let y = py1 + dy * (x - px1) / dx;
-      pixel_texture.draw(ctx,
-        DrawParams::new().position(Vec2::new(x as f32, y as f32)).scale(Vec2::new(2.0, 2.0)).color(*color),
-      );
-      x += inc_x;
+  loop {
+    let index = (y - y1) as usize;
+    if width.len() <= index {
+      width.push((x, x));
+    } else {
+      let (x1, x2) = width[index];
+      width[index] = (x1.min(x), x2.max(x));
     }
-  } else {
-    let inc_y = if dy > 0 { 1 } else { -1 };
-    let mut y = py1;
-    while y != py1 + dy {
-      let x = px1 + dx * (y - py1) / dy;
-      pixel_texture.draw(ctx,
-        DrawParams::new().position(Vec2::new(x as f32, y as f32)).scale(Vec2::new(2.0, 2.0)).color(*color),
-      );
-      y += inc_y;
+    if x == x2 && y == y2 { break; }
+    let e = 2 * err;
+    if e >= dy { err += dy; x += sx; }
+    if e <= dx { err += dx; y += sy; }
+  }
+}
+
+pub fn draw_fill_triangle(ctx: &mut Context, pixel_texture: &Texture, x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: &Color) {
+  if y1 <= y2 && y2 <= y3 {
+    if y2 == y3 || y1 == y2 { // bottom flat or top flat
+      let mut width : Vec<(i32, i32)> = Vec::new();
+      if y2 == y3 {
+        pixel_line(&mut width, x1, y1, x2, y2);
+        pixel_line(&mut width, x1, y1, x3, y3);
+      } else {
+        pixel_line(&mut width, x1, y1, x3, y3);
+        pixel_line(&mut width, x2, y2, x3, y3);
+      }
+      let mut y = y1;
+      for (x1, x2) in &width {
+        pixel_texture.draw(ctx,
+          DrawParams::new().position(Vec2::new(*x1 as f32, y as f32)).scale(Vec2::new((*x2 - *x1 + 1) as f32, 1.0)).color(*color),
+        );
+        y += 1;
+      }
+    } else { // split in two triangle
+      let x4 = x1 + ((((y2 - y1) as f32) / ((y3 - y1) as f32)) * ((x3 - x1) as f32)) as i32;
+      let y4 = y2;
+      draw_fill_triangle(ctx, pixel_texture, x1, y1, x2, y2, x4, y4, color);
+      draw_fill_triangle(ctx, pixel_texture, x2, y2, x4, y4, x3, y3, color);
     }
+  } else if y1 <= y3 && y3 <= y2 {
+    draw_fill_triangle(ctx, pixel_texture, x1, y1, x3, y3, x2, y2, color);
+  } else if y2 <= y1 && y1 <= y3 {
+    draw_fill_triangle(ctx, pixel_texture, x2, y2, x1, y1, x3, y3, color);
+  } else if y2 <= y3 && y3 <= y1 {
+    draw_fill_triangle(ctx, pixel_texture, x2, y2, x3, y3, x1, y1, color);
+  } else if y3 <= y1 && y1 <= y2 {
+    draw_fill_triangle(ctx, pixel_texture, x3, y3, x1, y1, x2, y2, color);
+  } else if y3 <= y2 && y2 <= y1 {
+    draw_fill_triangle(ctx, pixel_texture, x3, y3, x2, y2, x1, y1, color);
+  }
+}
+
+pub fn draw_line(ctx: &mut Context, pixel_texture: &Texture, mut x1: i32, mut y1: i32, x2: i32, y2: i32, color: &Color) {
+  let dx = (x2 - x1).abs();
+  let sx : i32 = if x1 < x2 { 1 } else { -1 };
+  let dy = -(y2 - y1).abs();
+  let sy : i32 = if y1 < y2 { 1 } else { -1 };
+  let mut err = dx + dy;
+
+  loop {
+    pixel_texture.draw(ctx,
+      DrawParams::new().position(Vec2::new(x1 as f32, y1 as f32)).scale(Vec2::new(1.0, 1.0)).color(*color),
+    );
+    if x1 == x2 && y1 == y2 { break; }
+    let e2 = 2 * err;
+    if e2 >= dy { err += dy; x1 += sx; }
+    if e2 <= dx { err += dx; y1 += sy; }
   }
 }
 
@@ -57,6 +109,7 @@ struct GameState {
   pixel_texture: Texture,
   fov: f32,
   meshes: Vec<Mesh>,
+  camera: Vec4<f32>,
 }
 
 impl Triangle {
@@ -72,13 +125,35 @@ impl Triangle {
     let mut normal = Vec4::new((a.y * b.z) - (a.z * b.y),
               (a.z * b.x) - (a.x * b.z),
               (a.x * b.y) - (a.y * b.x),
-              1.0);
+              0.0);
     normal.normalize();
     normal
   }
 }
 
 impl Mesh {
+  fn read_from_file(filename: &str) -> Self {
+    let mut points: Vec<Vec4<f32>> = Vec::new();
+    let file = File::open(filename).unwrap();
+    let reader = BufReader::new(file);
+    let mut triangles: Vec<Triangle> = Vec::new();
+
+    for line in reader.lines() {
+      let line = line.unwrap();
+      let split = line.split_whitespace().collect::<Vec<&str>>();
+      if split.len() > 0 {
+        if split[0] == "v" {
+          points.push(Vec4::new(split[1].parse::<f32>().unwrap(), split[2].parse::<f32>().unwrap(), split[3].parse::<f32>().unwrap(), 0.0));
+        }
+        else if split[0] == "f" {
+          triangles.push(Triangle { vertices: [ points[split[1].parse::<usize>().unwrap() - 1], points[split[2].parse::<usize>().unwrap() - 1], points[split[3].parse::<usize>().unwrap() - 1] ], });
+        }
+      }
+    }
+
+    Self::new(triangles)
+  }
+
   fn new(triangles: Vec<Triangle>) -> Self {
     let mut center = Vec4::new(0.0, 0.0, 0.0, 0.0);
     for triangle in &triangles {
@@ -89,7 +164,7 @@ impl Mesh {
       triangles: triangles,
       center: center,
       rotation: [0.0, 0.0, 0.0],
-      translation: Vec4::new(0.0, 0.0, 3.0, 0.0),
+      translation: Vec4::new(0.0, 0.0, 6.0, 0.0),
       rotation_mat: Mat4::identity(),
     }
   }
@@ -99,46 +174,58 @@ impl Mesh {
     self.rotation_mat.rotate_x(self.rotation[0]);
     self.rotation_mat.rotate_y(self.rotation[1]);
     self.rotation_mat.rotate_z(self.rotation[2]);
- }
+  }
 
-  fn draw(&self, ctx: &mut Context, pixel_texture: &Texture, transform: Mat4<f32>, screen_size: (f32, f32)) {
+  fn draw(&self, ctx: &mut Context, pixel_texture: &Texture, camera: Vec4<f32>, transform: Mat4<f32>, screen_size: (f32, f32)) {
     let (screen_width, screen_height) = screen_size;
     for triangle in &self.triangles {
-      if DBG_DRAW_WIREFRAME {
-        let mut p0 = (((triangle.vertices[0] - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
-        if p0.w != 0.0 { p0 /= p0.w; }
-        let mut p1 = (((triangle.vertices[1] - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
-        if p1.w != 0.0 { p1 /= p1.w; }
-        let mut p2 = (((triangle.vertices[2] - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
-        if p2.w != 0.0 { p2 /= p2.w; }
+      let triangle_normal = triangle.normal();
+      let triangle_normal_rotated = (triangle_normal * self.rotation_mat).normalized();
+      let mut camera_to_triangle_vector = (((triangle.vertices[0] - self.center) * self.rotation_mat) + self.center + self.translation - camera).normalized();
+      camera_to_triangle_vector.w = 0.0;
+      let dot_product_triangle_camera = triangle_normal_rotated.dot(camera_to_triangle_vector);
+      if dot_product_triangle_camera < 0.0 {
+        if DBG_DRAW_FILL_TRIANGLE || DBG_DRAW_WIREFRAME {
+          let mut p0 = (((triangle.vertices[0] - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
+          if p0.w != 0.0 { p0 /= p0.w; }
+          let mut p1 = (((triangle.vertices[1] - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
+          if p1.w != 0.0 { p1 /= p1.w; }
+          let mut p2 = (((triangle.vertices[2] - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
+          if p2.w != 0.0 { p2 /= p2.w; }
 
-        p0.x = (p0.x + 1.0) * 0.5 * (screen_width as f32);
-        p0.y = (p0.y + 1.0) * 0.5 * (screen_height as f32);
-        p1.x = (p1.x + 1.0) * 0.5 * (screen_width as f32);
-        p1.y = (p1.y + 1.0) * 0.5 * (screen_height as f32);
-        p2.x = (p2.x + 1.0) * 0.5 * (screen_width as f32);
-        p2.y = (p2.y + 1.0) * 0.5 * (screen_height as f32);
+          p0.x = (p0.x + 1.0) * 0.5 * (screen_width as f32);
+          p0.y = (p0.y + 1.0) * 0.5 * (screen_height as f32);
+          p1.x = (p1.x + 1.0) * 0.5 * (screen_width as f32);
+          p1.y = (p1.y + 1.0) * 0.5 * (screen_height as f32);
+          p2.x = (p2.x + 1.0) * 0.5 * (screen_width as f32);
+          p2.y = (p2.y + 1.0) * 0.5 * (screen_height as f32);
 
-        draw_line(ctx, &pixel_texture, p0.x, p0.y, p1.x, p1.y, &Color::WHITE);
-        draw_line(ctx, &pixel_texture, p1.x, p1.y, p2.x, p2.y, &Color::WHITE);
-        draw_line(ctx, &pixel_texture, p2.x, p2.y, p0.x, p0.y, &Color::WHITE);
-      }
-      if DBG_DRAW_NORMAL {
-        let triangle_center = triangle.center();
-        let mut p0 = (((triangle_center - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
-        if p0.w != 0.0 { p0 /= p0.w; }
-        let mut p1 = (((triangle_center + triangle.normal() - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
-        if p1.w != 0.0 { p1 /= p1.w; }
+          if DBG_DRAW_FILL_TRIANGLE {
+            draw_fill_triangle(ctx, &pixel_texture, p0.x as i32, p0.y as i32, p1.x as i32, p1.y as i32, p2.x as i32, p2.y as i32, &Color::RED);
+          }
+          if DBG_DRAW_WIREFRAME {
+            draw_line(ctx, &pixel_texture, p0.x as i32, p0.y as i32, p1.x as i32, p1.y as i32, &Color::WHITE);
+            draw_line(ctx, &pixel_texture, p1.x as i32, p1.y as i32, p2.x as i32, p2.y as i32, &Color::WHITE);
+            draw_line(ctx, &pixel_texture, p0.x as i32, p0.y as i32, p2.x as i32, p2.y as i32, &Color::WHITE);
+          }
+        }
+        if DBG_DRAW_NORMAL {
+          let triangle_center = triangle.center();
+          let mut p0 = (((triangle_center - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
+          if p0.w != 0.0 { p0 /= p0.w; }
+          let mut p1 = (((triangle_center + triangle_normal - self.center) * self.rotation_mat) + self.center + self.translation) * transform;
+          if p1.w != 0.0 { p1 /= p1.w; }
 
-        p0.x = (p0.x + 1.0) * 0.5 * (screen_width as f32);
-        p0.y = (p0.y + 1.0) * 0.5 * (screen_height as f32);
-        p1.x = (p1.x + 1.0) * 0.5 * (screen_width as f32);
-        p1.y = (p1.y + 1.0) * 0.5 * (screen_height as f32);
-       
-        draw_line(ctx, &pixel_texture, p0.x, p0.y, p1.x, p1.y, &Color::WHITE);
+          p0.x = (p0.x + 1.0) * 0.5 * (screen_width as f32);
+          p0.y = (p0.y + 1.0) * 0.5 * (screen_height as f32);
+          p1.x = (p1.x + 1.0) * 0.5 * (screen_width as f32);
+          p1.y = (p1.y + 1.0) * 0.5 * (screen_height as f32);
+
+          draw_line(ctx, &pixel_texture, p0.x as i32, p0.y as i32, p1.x as i32, p1.y as i32, &Color::WHITE);
+        }
       }
     }
-}
+  }
 }
 
 impl GameState {
@@ -147,21 +234,9 @@ impl GameState {
       pixel_texture: Texture::from_rgba(ctx, 1, 1, &[255, 255, 255, 255])?,
       fov: (90.0 as f32).to_radians(),
       meshes: vec![
-        Mesh::new(vec![
-          Triangle { vertices: [ Vec4::new(0.0, 0.0, 0.0, 1.0), Vec4::new(0.0, 1.0, 0.0, 1.0), Vec4::new(1.0, 0.0, 0.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(0.0, 1.0, 0.0, 1.0), Vec4::new(1.0, 1.0, 0.0, 1.0), Vec4::new(1.0, 0.0, 0.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::new(1.0, 0.0, 1.0, 1.0), Vec4::new(0.0, 1.0, 1.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(0.0, 1.0, 1.0, 1.0), Vec4::new(1.0, 0.0, 1.0, 1.0), Vec4::new(1.0, 1.0, 1.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(0.0, 1.0, 0.0, 1.0), Vec4::new(0.0, 1.0, 1.0, 1.0), Vec4::new(1.0, 1.0, 1.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(1.0, 1.0, 1.0, 1.0), Vec4::new(1.0, 1.0, 0.0, 1.0), Vec4::new(0.0, 1.0, 0.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(0.0, 0.0, 0.0, 1.0), Vec4::new(1.0, 0.0, 1.0, 1.0), Vec4::new(0.0, 0.0, 1.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(1.0, 0.0, 1.0, 1.0), Vec4::new(0.0, 0.0, 0.0, 1.0), Vec4::new(1.0, 0.0, 0.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(0.0, 0.0, 0.0, 1.0), Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::new(0.0, 1.0, 0.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::new(0.0, 1.0, 1.0, 1.0), Vec4::new(0.0, 1.0, 0.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(1.0, 0.0, 0.0, 1.0), Vec4::new(1.0, 1.0, 0.0, 1.0), Vec4::new(1.0, 0.0, 1.0, 1.0) ], },
-          Triangle { vertices: [ Vec4::new(1.0, 0.0, 1.0, 1.0), Vec4::new(1.0, 1.0, 0.0, 1.0), Vec4::new(1.0, 1.0, 1.0, 1.0) ], },
-        ]),
+        Mesh::read_from_file("./assets/teapot.obj"),
       ],
+      camera: Vec4::new(0.0, 0.0, 0.0, 0.0),
     })
   }
 }
@@ -180,7 +255,7 @@ impl State for GameState {
       mesh.rotation[1] += rotation_delta;
       mesh.rotation[2] += rotation_delta;
       mesh.update();
-     }
+    }
     Ok(())
   }
 
@@ -200,7 +275,7 @@ impl State for GameState {
     graphics::clear(ctx, Color::BLACK);
 
     for mesh in &self.meshes {
-      mesh.draw(ctx, &self.pixel_texture, projection, (screen_width as f32, screen_height as f32));
+      mesh.draw(ctx, &self.pixel_texture, self.camera, projection, (screen_width as f32, screen_height as f32));
     }
 
     Ok(())
